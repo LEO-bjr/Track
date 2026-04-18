@@ -7491,12 +7491,6 @@
         <p style="color:var(--text-2);margin-bottom:12px;">
           <strong style="color:var(--text);">💡 Running Total:</strong> <span id="hpTotalPreview">0 HP</span> to be distributed
         </p>
-        <button class="btn btn-secondary btn-sm" id="toggleDeltaPreview" style="margin-bottom:12px;padding:6px 12px;font-size:0.85rem;" onclick="document.getElementById('deltaPreviewContainer').style.display = document.getElementById('deltaPreviewContainer').style.display === 'none' ? 'block' : 'none';">
-          📊 Show Breakdown
-        </button>
-        <div id="deltaPreviewContainer" style="display:none;margin-bottom:12px;max-height:200px;overflow-y:auto;padding:12px;background:var(--surface);border-radius:6px;border:1px solid var(--border);font-size:0.85rem;">
-          <div id="deltaPreviewList" style="color:var(--text-2);"></div>
-        </div>
         <button class="btn btn-primary" id="submitBulkBtn" style="min-height:48px;padding:12px 24px;font-weight:600;width:100%;">
           ✅ Submit Assessments & Update House Points
         </button>
@@ -7643,22 +7637,6 @@
         
         const sign = totalDelta > 0 ? '+' : '';
         document.getElementById('hpTotalPreview').textContent = `${sign}${totalDelta} HP to distribute (${affectedStudents} students)`;
-        
-        /* Populate breakdown list */
-        const previewList = document.getElementById('deltaPreviewList');
-        if (studentDeltas.length > 0) {
-          previewList.innerHTML = studentDeltas.map(sd => {
-            const sign = sd.delta > 0 ? '+' : '';
-            const color = sd.delta > 0 ? '#00D9A1' : '#FF6A00';
-            return `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);align-items:center;">
-              <span>${sd.name}</span>
-              <span style="font-weight:600;color:${color};">${sign}${sd.delta} HP</span>
-              <span style="font-size:0.75rem;color:var(--text-2);margin-left:12px;">(${sd.previousTotal} → ${sd.newTotal})</span>
-            </div>`;
-          }).join('');
-        } else {
-          previewList.innerHTML = '<p style="color:var(--text-2);text-align:center;">No assessments recorded yet.</p>';
-        }
       }
       
       updateHPPreview();
