@@ -7357,9 +7357,15 @@
       
       <div style="margin-top:20px;padding:16px;background:var(--surface-2);border-radius:8px;">
         <p style="color:var(--text-2);margin-bottom:12px;">
-          <strong style="color:var(--text);">💡 Running Total:</strong> <span id="hpTotalPreview">0 HP</span> to be awarded
+          <strong style="color:var(--text);">💡 Running Total:</strong> <span id="hpTotalPreview">0 HP</span> to be distributed
         </p>
-        <button class="btn btn-primary" id="submitBulkBtn" style="min-height:48px;padding:12px 24px;font-weight:600;">
+        <button class="btn btn-secondary btn-sm" id="toggleDeltaPreview" style="margin-bottom:12px;padding:6px 12px;font-size:0.85rem;" onclick="document.getElementById('deltaPreviewContainer').style.display = document.getElementById('deltaPreviewContainer').style.display === 'none' ? 'block' : 'none';">
+          📊 Show Breakdown
+        </button>
+        <div id="deltaPreviewContainer" style="display:none;margin-bottom:12px;max-height:200px;overflow-y:auto;padding:12px;background:var(--surface);border-radius:6px;border:1px solid var(--border);font-size:0.85rem;">
+          <div id="deltaPreviewList" style="color:var(--text-2);"></div>
+        </div>
+        <button class="btn btn-primary" id="submitBulkBtn" style="min-height:48px;padding:12px 24px;font-weight:600;width:100%;">
           ✅ Submit Assessments & Update House Points
         </button>
       </div>`;
@@ -7460,23 +7466,47 @@
         
         let totalDelta = 0;
         let affectedStudents = 0;
+        const studentDeltas = [];
         
         classStudents.forEach(student => {
           const compositeId = `${student._id}_${sportKey}_teacher`;
           const assessment = sdkLoad('assessments', compositeId);
           if (assessment && assessment.skills && assessment.skills.length > 0) {
+            /* Use stored previous total for accurate delta calculation */
+            const previousTotal = assessment._previousAssessmentTotal || 0;
             const newTotal = assessment.skills.reduce((sum, s) => sum + (s.level || 0), 0);
-            const oldTotal = getOldAssessmentTotalForSport(student._id, sportKey);
-            const delta = newTotal - oldTotal;
+            const delta = newTotal - previousTotal;
             if (newTotal > 0) {
               totalDelta += delta;
               affectedStudents++;
+              studentDeltas.push({
+                name: `${student.firstName} ${student.familyName}`,
+                previousTotal,
+                newTotal,
+                delta
+              });
             }
           }
         });
         
         const sign = totalDelta > 0 ? '+' : '';
         document.getElementById('hpTotalPreview').textContent = `${sign}${totalDelta} HP to distribute (${affectedStudents} students)`;
+        
+        /* Populate breakdown list */
+        const previewList = document.getElementById('deltaPreviewList');
+        if (studentDeltas.length > 0) {
+          previewList.innerHTML = studentDeltas.map(sd => {
+            const sign = sd.delta > 0 ? '+' : '';
+            const color = sd.delta > 0 ? '#00D9A1' : '#FF6A00';
+            return `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);align-items:center;">
+              <span>${sd.name}</span>
+              <span style="font-weight:600;color:${color};">${sign}${sd.delta} HP</span>
+              <span style="font-size:0.75rem;color:var(--text-2);margin-left:12px;">(${sd.previousTotal} → ${sd.newTotal})</span>
+            </div>`;
+          }).join('');
+        } else {
+          previewList.innerHTML = '<p style="color:var(--text-2);text-align:center;">No assessments recorded yet.</p>';
+        }
       }
       
       updateHPPreview();
@@ -7489,21 +7519,30 @@
       const sport = SPORTS_LIST.find(s => s.key === sportKey);
       if (!sport) return;
       
-      /* Get old assessment total for this sport BEFORE updating */
-      const oldTotal = getOldAssessmentTotalForSport(studentId, sportKey);
-      
       /* Composite ID for teacher assessment */
       const compositeId = `${studentId}_${sportKey}_teacher`;
-      let assessment = sdkLoad('assessments', compositeId) || {
-        _id: compositeId,
-        studentId: studentId,
-        sportKey: sportKey,
-        lessonNum: 10,
-        source: 'teacher',
-        skills: [],
-        submittedAt: new Date().toISOString(),
-        _sportAssessmentTotal: 0
-      };
+      let assessment = sdkLoad('assessments', compositeId);
+      
+      /* If assessment exists, store its current total as the previous total for delta calculation later */
+      let previousTotal = 0;
+      if (assessment && assessment.skills) {
+        previousTotal = assessment.skills.reduce((sum, s) => sum + (s.level || 0), 0);
+      }
+      
+      /* Initialize if doesn't exist */
+      if (!assessment) {
+        assessment = {
+          _id: compositeId,
+          studentId: studentId,
+          sportKey: sportKey,
+          lessonNum: 10,
+          source: 'teacher',
+          skills: [],
+          submittedAt: new Date().toISOString(),
+          _previousAssessmentTotal: 0,
+          _currentAssessmentTotal: 0
+        };
+      }
       
       /* Update or add skill */
       const existingSkillIdx = assessment.skills.findIndex(s => s.name === skillName);
@@ -7517,12 +7556,12 @@
         });
       }
       
-      /* Calculate new total and delta */
+      /* Calculate new total */
       const newTotal = assessment.skills.reduce((sum, s) => sum + (s.level || 0), 0);
-      const delta = newTotal - oldTotal;
       
-      /* Store the new assessment total for next comparison */
-      assessment._sportAssessmentTotal = newTotal;
+      /* Store for delta calculation on submit */
+      assessment._previousAssessmentTotal = previousTotal;
+      assessment._currentAssessmentTotal = newTotal;
       assessment.submittedAt = new Date().toISOString();
       
       /* Save assessment - but don't apply HP yet (will do on final submit) */
@@ -7603,12 +7642,14 @@
           
           if (assessment && assessment.skills && assessment.skills.length > 0) {
             studentsProcessed++;
-            const newTotal = assessment.skills.reduce((sum, s) => sum + (s.level || 0), 0);
-            const oldTotal = getOldAssessmentTotalForSport(student._id, sportKey);
-            const delta = newTotal - oldTotal;
             
-            console.log(`[Bulk Assessment] Student: ${student.firstName} ${student.familyName}, Old Total: ${oldTotal}, New Total: ${newTotal}, Delta: ${delta}`);
-            hpDeltaPerStudent[student._id] = { oldTotal, newTotal, delta };
+            /* Use stored previous total for accurate delta calculation */
+            const previousTotal = assessment._previousAssessmentTotal || 0;
+            const newTotal = assessment.skills.reduce((sum, s) => sum + (s.level || 0), 0);
+            const delta = newTotal - previousTotal;
+            
+            console.log(`[Bulk Assessment] Student: ${student.firstName} ${student.familyName}, Previous Total: ${previousTotal}, New Total: ${newTotal}, Delta: ${delta}`);
+            hpDeltaPerStudent[student._id] = { previousTotal, newTotal, delta };
 
             /* Apply delta only if there's a change */
             if (delta !== 0 || !assessment.appliedAt) {
@@ -7631,6 +7672,9 @@
                   levelName: ['', 'Developing', 'Competent', 'Proficient', 'Expert'][skill.level] || 'Unknown'
                 }));
               }
+              
+              /* Update the stored previous total for next submission */
+              assessment._previousAssessmentTotal = newTotal;
               
               sdkSave('assessments', compositeId, assessment);
               
@@ -8255,6 +8299,21 @@
     function renderStudentDashboard(studentId) {
       const student = sdkLoad('students', studentId);
       if (!student) return;
+
+      /* Check for pending HP updates from bulk assessment */
+      const hpUpdateKey = `hpUpdate_${studentId}`;
+      const pendingUpdate = localStorage.getItem(hpUpdateKey);
+      if (pendingUpdate) {
+        try {
+          const update = JSON.parse(pendingUpdate);
+          const sign = update.hpAdded > 0 ? '+' : '';
+          const color = update.hpAdded > 0 ? '✅' : '⚠️';
+          showToast(`${color} Teacher Assessment Complete! ${sign}${update.hpAdded} House Points awarded.`);
+          localStorage.removeItem(hpUpdateKey);
+        } catch (e) {
+          console.error('Error parsing pending HP update:', e);
+        }
+      }
 
       const fullName = `${student.firstName} ${student.familyName}`;
       const xp = student.xp || 0;
@@ -10178,6 +10237,35 @@
 
         tableHtml += '</tbody></table>';
         document.getElementById('skillsDataTable').innerHTML = tableHtml;
+
+        /* Add Teacher Assessment Breakdown with Individual Skill Levels */
+        let breakdownHtml = '<div style="margin-top:20px;padding:14px;background:rgba(249,168,37,0.1);border-radius:8px;border:1px solid #F9A825;">';
+        breakdownHtml += '<h4 style="margin:0 0 12px 0;color:var(--text);font-size:0.95rem;">📊 Teacher Assessment Breakdown</h4>';
+        
+        if (teacherAssessment.skills && teacherAssessment.skills.length > 0) {
+          const totalTeacherPoints = teacherAssessment.skills.reduce((sum, s) => sum + (s.level || 0), 0);
+          breakdownHtml += '<div style="margin-bottom:8px;padding:8px;background:var(--surface);border-radius:6px;border-left:4px solid #F9A825;">';
+          breakdownHtml += `<div style="font-weight:600;color:var(--text);">Total Points Awarded: <span style="color:#F9A825;font-size:1.1rem;">${totalTeacherPoints} HP</span></div>`;
+          breakdownHtml += '</div>';
+          
+          breakdownHtml += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">';
+          teacherAssessment.skills.forEach(skill => {
+            const level = skill.level || 0;
+            const levelName = levelNames[level] || 'Unassessed';
+            const colors = { 1: '#FF6B6B', 2: '#4ECDC4', 3: '#45B7D1', 4: '#FFA500' };
+            const color = colors[level] || '#999';
+            breakdownHtml += `<div style="padding:8px;background:var(--surface);border-radius:6px;border-left:4px solid ${color};display:flex;justify-content:space-between;align-items:center;">
+              <span style="color:var(--text-2);font-size:0.85rem;">${skill.name}</span>
+              <span style="font-weight:700;color:${color};font-size:1rem;">${level}</span>
+            </div>`;
+          });
+          breakdownHtml += '</div>';
+        } else {
+          breakdownHtml += '<p style="color:var(--text-2);font-size:0.85rem;margin:0;">No skills assessed yet.</p>';
+        }
+        
+        breakdownHtml += '</div>';
+        document.getElementById('skillsDataTable').innerHTML += breakdownHtml;
 
         // Teacher comment
         if (teacherAssessment.comment) {
