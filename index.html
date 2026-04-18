@@ -5760,12 +5760,33 @@
                 animateHPChange(currentStudentId, payload.hpAdded);
                 /* Refresh skill overview if currently viewing */
                 if (currentSportKey && document.getElementById('lessonContentView').style.display !== 'none' && currentLessonNumber === 'skills') {
+                  console.log('[Student App] Refreshing skills overview after HP update');
                   renderSkillsOverview(currentSportKey);
                 }
               }
             }
           } catch (err) {
             console.error('[Student App] Failed to parse hpUpdate payload', err);
+          }
+        }
+        if (e.key === 'assessmentDataRefresh') {
+          // Cross-tab/cross-window communication for assessment updates
+          try {
+            const payload = JSON.parse(e.newValue || '{}');
+            if (payload.studentId === currentStudentId) {
+              console.log('[Student App] Cross-tab assessment refresh detected:', payload);
+              if (currentSportKey === payload.sportKey && document.getElementById('lessonContentTitle').textContent.includes('Skills Overview')) {
+                // Clear cached data to force fresh read
+                if (window.skillsChartInstance) {
+                  window.skillsChartInstance.destroy();
+                  window.skillsChartInstance = null;
+                }
+                renderSkillsOverview(currentSportKey);
+                showToast('📊 Skills data synchronized across tabs!');
+              }
+            }
+          } catch (err) {
+            console.error('[Student App] Failed to parse assessmentDataRefresh', err);
           }
         }
       });
@@ -5796,8 +5817,9 @@
       /* Real-time Assessment update listener (same tab/window) */
       window.addEventListener('studentAssessmentUpdated', function(e) {
         const { studentId, sportKey } = e.detail || {};
+        console.log('[Student App] Assessment update event received:', { studentId, sportKey, currentStudentId, currentSportKey, isSkillsView: document.getElementById('lessonContentTitle').textContent.includes('Skills Overview') });
         if (studentId === currentStudentId && sportKey === currentSportKey && document.getElementById('lessonContentTitle').textContent.includes('Skills Overview')) {
-          console.log('[Student App] Assessment updated for', sportKey);
+          console.log('[Student App] Updating Skill Overview with fresh teacher data');
           renderSkillsOverview(currentSportKey);
           showToast('📊 Teacher assessment received!');
         }
@@ -7891,6 +7913,27 @@
               
               /* Notify student of HP update */
               if (delta !== 0) notifyStudentHPUpdate(student._id, delta);
+              
+              /* Real-time notification: Dispatch event to trigger student app refresh */
+              const assessmentUpdateEvent = new CustomEvent('studentAssessmentUpdated', {
+                detail: {
+                  studentId: student._id,
+                  sportKey: sportKey,
+                  assessmentId: `${student._id}_${sportKey}_teacher`,
+                  timestamp: new Date().toISOString()
+                }
+              });
+              window.dispatchEvent(assessmentUpdateEvent);
+              console.log(`[Student Assessment Notification] Dispatched refresh event for student ${student._id} / ${sportKey}`);
+              
+              /* Cross-tab/cross-window notification via localStorage */
+              const crossTabPayload = {
+                studentId: student._id,
+                sportKey: sportKey,
+                timestamp: new Date().toISOString()
+              };
+              localStorage.setItem('assessmentDataRefresh', JSON.stringify(crossTabPayload));
+              console.log(`[Cross-Tab Sync] Assessment update notified to all tabs for student ${student._id}`);
             }
             
             /* Track skill distribution */
@@ -10286,14 +10329,16 @@
       return names[level] || 'Unknown';
     }
 
+    /* Manual refresh trigger for synchronizing with latest teacher data */
+    function forceRefreshSkillsOverview() {
+      console.log('[Skill Overview] Force refresh triggered by student');  
+      if (currentSportKey) {
+        renderSkillsOverview(currentSportKey);
+        showToast('📊 Skills Overview updated with latest data!');
+      }
+    }
+
     function renderSkillsOverview(sportKey) {
-      const sport = SPORTS_LIST.find(s => s.key === sportKey);
-      const student = sdkLoad('students', currentStudentId);
-      if (!student || !sport) return;
-
-      document.getElementById('lessonContentTitle').textContent = `${sport.name} \u2014 Skills Overview`;
-
-      const body = document.getElementById('lessonContentBody');
 
       // Gather all self-assessments for this sport (Lessons 1, 5, 9, 10)
       const assessmentLessons = [1, 5, 9, 10];
@@ -10303,24 +10348,40 @@
         const a = sdkLoad('assessments', compositeId);
         if (a) selfAssessments.push({ ...a, lessonNum: ln });
       });
+      
+      console.log('[Skill Overview] Self-assessments loaded:', {
+        count: selfAssessments.length,
+        lessons: selfAssessments.map(a => a.lessonNum)
+      });
 
-      // Teacher assessment - use STANDARD ID format (consolidated upsert)
+      // HARD REFRESH: Bypass cache for teacher assessment - force read fresh from localStorage
       let teacherAssessment = null;
       const standardCompositeId = `${currentStudentId}_${sportKey}_teacher`;
       
-      const a = sdkLoad('assessments', standardCompositeId);
-      if (a && a.source === 'teacher') {
-        teacherAssessment = a;
-        console.log('[Skill Overview] Loaded teacher assessment with standard ID:', { standardCompositeId, hasSkills: !!a.skills });
+      // Force direct read from localStorage (no SDK caching)
+      const assessmentStore = JSON.parse(localStorage.getItem('assessments') || '{}');
+      const freshAssessmentData = assessmentStore[standardCompositeId];
+      
+      if (freshAssessmentData && freshAssessmentData.source === 'teacher') {
+        teacherAssessment = freshAssessmentData;
+        console.log('[Skill Overview] FRESH teacher assessment loaded from storage:', { 
+          compositeId: standardCompositeId,
+          hasSkills: !!teacherAssessment.skills,
+          skillCount: teacherAssessment.skills ? teacherAssessment.skills.length : 0,
+          updatedAt: teacherAssessment.updatedAt || teacherAssessment._updatedAt,
+          appliedAt: teacherAssessment.appliedAt
+        });
+      } else if (freshAssessmentData) {
+        console.log('[Skill Overview] Found record but not teacher assessment:', { compositeId: standardCompositeId, source: freshAssessmentData.source });
       }
       
-      // Fallback: If not found, search for ANY teacher assessment for this student+sport (legacy recovery)
+      // Fallback: Search for ANY teacher assessment if standard ID not found
       if (!teacherAssessment) {
-        let assessmentStore = sdkParseStore('assessments');
+        console.log('[Skill Overview] Standard ID not found, searching for legacy records...');
         for (const [id, doc] of Object.entries(assessmentStore)) {
           if (doc.studentId === currentStudentId && doc.sportKey === sportKey && doc.source === 'teacher') {
             teacherAssessment = doc;
-            console.log('[Skill Overview] Found teacher assessment with legacy ID (will be consolidated):', { legacyId: id });
+            console.log('[Skill Overview] Found teacher assessment with legacy ID (will consolidate):', { legacyId: id, skillCount: doc.skills ? doc.skills.length : 0 });
             break;
           }
         }
@@ -10331,9 +10392,10 @@
 
       if (selfAssessments.length === 0 && !teacherAssessment) {
         body.innerHTML = `<div class="empty-state">
-          <div class="empty-icon">\ud83d\udcca</div>
+          <div class="empty-icon">📊</div>
           <p>Complete assessment lessons 1, 5, 9, and 10 to see your skills chart.</p>
         </div>`;
+        console.log('[Skill Overview] Empty state: No self or teacher assessments');
         return;
       }
 
@@ -10351,6 +10413,11 @@
       let skillLabels = Object.keys(selfSkillMap);
       let selfValues = skillLabels.map(k => selfSkillMap[k].points || 0);
 
+      console.log('[Skill Overview] Self-assessment mapping:', {
+        uniqueSkills: skillLabels,
+        selfValues
+      });
+
       // Build teacher values if exists
       let teacherValues = [];
       let teacherSkillMap = {};
@@ -10358,11 +10425,11 @@
         // Try skillRatings first (converted format), then fall back to skills array
         const teacherSkillsData = teacherAssessment.skillRatings || teacherAssessment.skills || [];
         
-        console.log('[Skill Overview] Teacher Assessment Data:', {
+        console.log('[Skill Overview] Teacher Assessment Data Source:', {
           hasSkillRatings: !!teacherAssessment.skillRatings,
           hasSkills: !!teacherAssessment.skills,
           skillsCount: teacherAssessment.skills ? teacherAssessment.skills.length : 0,
-          skillsData: teacherSkillsData
+          dataFormat: teacherAssessment.skillRatings ? 'skillRatings' : 'skills'
         });
         
         teacherSkillsData.forEach(sr => {
@@ -10397,19 +10464,21 @@
         
         // Build teacher values in the EXACT SAME ORDER as merged skill labels
         teacherValues = skillLabels.map(k => {
-          console.log(`  Mapping skill "${k}":`, { exists: !!teacherSkillMap[k], value: teacherSkillMap[k]?.points || teacherSkillMap[k]?.level || 0 });
+          const value = teacherSkillMap[k]?.points !== undefined ? teacherSkillMap[k]?.points : teacherSkillMap[k]?.level || 0;
+          console.log(`  [Teacher Skill Mapping] "${k}": exist=${!!teacherSkillMap[k]}, value=${value}`);
           if (teacherSkillMap[k]) {
             return teacherSkillMap[k].points !== undefined ? teacherSkillMap[k].points : teacherSkillMap[k].level || 0;
           }
           return 0; // Teacher didn't assess this skill
         });
         
-        console.log('[Skill Overview] Final Chart Data Mapping:', {
+        console.log('[Skill Overview] Graphic Data Source:', {
           skillLabels,
           selfValues,
           teacherValues,
           dataCount: skillLabels.length,
-          teacherDataCount: teacherValues.length
+          teacherDataCount: teacherValues.length,
+          isSync: skillLabels.length === selfValues.length && skillLabels.length === teacherValues.length
         });
       }
 
