@@ -8620,27 +8620,31 @@
 
       /* Ring style based on level - with glow progression */
       const ring = document.getElementById('avatarRingBorder');
-      ring.className = 'ring';
-      ring.style.color = getHouseColor(student.house);
-      ring.style.borderColor = getHouseColor(student.house);
+      if (ring) {
+        ring.className = 'ring';
+        ring.style.color = getHouseColor(student.house);
+        ring.style.borderColor = getHouseColor(student.house);
 
-      /* Glow intensifies with level milestones */
-      if (level >= 40) {
-        ring.classList.add('level-legendary');
-        ring.style.boxShadow = `0 0 20px ${getHouseColor(student.house)}`;
-      } else if (level >= 30) {
-        ring.classList.add('level-elite');
-        ring.style.boxShadow = `0 0 16px ${getHouseColor(student.house)}`;
-      } else if (level >= 20) {
-        ring.classList.add('level-strong');
-        ring.style.boxShadow = `0 0 12px ${getHouseColor(student.house)}`;
-      } else if (level >= 10) {
-        ring.classList.add('level-glow');
-        ring.style.boxShadow = `0 0 8px ${getHouseColor(student.house)}`;
+        /* Glow intensifies with level milestones */
+        if (level >= 40) {
+          ring.classList.add('level-legendary');
+          ring.style.boxShadow = `0 0 20px ${getHouseColor(student.house)}`;
+        } else if (level >= 30) {
+          ring.classList.add('level-elite');
+          ring.style.boxShadow = `0 0 16px ${getHouseColor(student.house)}`;
+        } else if (level >= 20) {
+          ring.classList.add('level-strong');
+          ring.style.boxShadow = `0 0 12px ${getHouseColor(student.house)}`;
+        } else if (level >= 10) {
+          ring.classList.add('level-glow');
+          ring.style.boxShadow = `0 0 8px ${getHouseColor(student.house)}`;
+        } else {
+          ring.classList.add('level-basic');
+          ring.style.borderColor = '#999';
+          ring.style.color = '#999';
+        }
       } else {
-        ring.classList.add('level-basic');
-        ring.style.borderColor = '#999';
-        ring.style.color = '#999';
+        console.warn('[renderStudentDashboard] avatarRingBorder element not found in DOM');
       }
 
       /* Achievement badges */
@@ -10339,65 +10343,92 @@
     }
 
     function renderSkillsOverview(sportKey) {
+      try {
+        console.log('[Skill Overview] Starting render with try-catch wrapper');
+        
+        /* Load current student */
+        const student = sdkLoad('students', currentStudentId);
+        if (!student) {
+          console.error('[Skill Overview] Student not found:', { currentStudentId });
+          showToast('❌ Student profile not found');
+          return;
+        }
 
-      // Gather all self-assessments for this sport (Lessons 1, 5, 9, 10)
-      const assessmentLessons = [1, 5, 9, 10];
-      let selfAssessments = [];
-      assessmentLessons.forEach(ln => {
-        const compositeId = `${currentStudentId}_${sportKey}_L${ln}`;
-        const a = sdkLoad('assessments', compositeId);
-        if (a) selfAssessments.push({ ...a, lessonNum: ln });
-      });
-      
-      console.log('[Skill Overview] Self-assessments loaded:', {
-        count: selfAssessments.length,
-        lessons: selfAssessments.map(a => a.lessonNum)
-      });
+        /* Get DOM element for content */
+        const body = document.getElementById('lessonContentBody');
+        if (!body) {
+          console.error('[Skill Overview] lessonContentBody not found in DOM');
+          return;
+        }
 
-      // HARD REFRESH: Bypass cache for teacher assessment - force read fresh from localStorage
-      let teacherAssessment = null;
-      const standardCompositeId = `${currentStudentId}_${sportKey}_teacher`;
-      
-      // Force direct read from localStorage (no SDK caching)
-      const assessmentStore = JSON.parse(localStorage.getItem('assessments') || '{}');
-      const freshAssessmentData = assessmentStore[standardCompositeId];
-      
-      if (freshAssessmentData && freshAssessmentData.source === 'teacher') {
-        teacherAssessment = freshAssessmentData;
-        console.log('[Skill Overview] FRESH teacher assessment loaded from storage:', { 
-          compositeId: standardCompositeId,
-          hasSkills: !!teacherAssessment.skills,
-          skillCount: teacherAssessment.skills ? teacherAssessment.skills.length : 0,
-          updatedAt: teacherAssessment.updatedAt || teacherAssessment._updatedAt,
-          appliedAt: teacherAssessment.appliedAt
+        const sport = SPORTS_LIST.find(s => s.key === sportKey);
+        if (!sport) {
+          console.error('[Skill Overview] Sport not found:', { sportKey });
+          return;
+        }
+
+        console.log('[Skill Overview] Rendering overview for student:', { studentId: currentStudentId, sportKey, studentName: `${student.firstName} ${student.familyName}` });
+
+        document.getElementById('lessonContentTitle').textContent = `${sport.name} — Skills Overview`;
+
+        // Gather all self-assessments for this sport (Lessons 1, 5, 9, 10)
+        const assessmentLessons = [1, 5, 9, 10];
+        let selfAssessments = [];
+        assessmentLessons.forEach(ln => {
+          const compositeId = `${currentStudentId}_${sportKey}_L${ln}`;
+          const a = sdkLoad('assessments', compositeId);
+          if (a) selfAssessments.push({ ...a, lessonNum: ln });
         });
-      } else if (freshAssessmentData) {
-        console.log('[Skill Overview] Found record but not teacher assessment:', { compositeId: standardCompositeId, source: freshAssessmentData.source });
-      }
-      
-      // Fallback: Search for ANY teacher assessment if standard ID not found
-      if (!teacherAssessment) {
-        console.log('[Skill Overview] Standard ID not found, searching for legacy records...');
-        for (const [id, doc] of Object.entries(assessmentStore)) {
-          if (doc.studentId === currentStudentId && doc.sportKey === sportKey && doc.source === 'teacher') {
-            teacherAssessment = doc;
-            console.log('[Skill Overview] Found teacher assessment with legacy ID (will consolidate):', { legacyId: id, skillCount: doc.skills ? doc.skills.length : 0 });
-            break;
+        
+        console.log('[Skill Overview] Self-assessments loaded:', {
+          count: selfAssessments.length,
+          lessons: selfAssessments.map(a => a.lessonNum)
+        });
+
+        // HARD REFRESH: Bypass cache for teacher assessment - force read fresh from localStorage
+        let teacherAssessment = null;
+        const standardCompositeId = `${currentStudentId}_${sportKey}_teacher`;
+        
+        // Force direct read from localStorage (no SDK caching)
+        const assessmentStore = JSON.parse(localStorage.getItem('assessments') || '{}');
+        const freshAssessmentData = assessmentStore[standardCompositeId];
+        
+        if (freshAssessmentData && freshAssessmentData.source === 'teacher') {
+          teacherAssessment = freshAssessmentData;
+          console.log('[Skill Overview] FRESH teacher assessment loaded from storage:', { 
+            compositeId: standardCompositeId,
+            hasSkills: !!teacherAssessment.skills,
+            skillCount: teacherAssessment.skills ? teacherAssessment.skills.length : 0,
+            updatedAt: teacherAssessment.updatedAt || teacherAssessment._updatedAt,
+            appliedAt: teacherAssessment.appliedAt
+          });
+        } else if (freshAssessmentData) {
+          console.log('[Skill Overview] Found record but not teacher assessment:', { compositeId: standardCompositeId, source: freshAssessmentData.source });
+        }
+        
+        // Fallback: Search for ANY teacher assessment if standard ID not found
+        if (!teacherAssessment) {
+          console.log('[Skill Overview] Standard ID not found, searching for legacy records...');
+          for (const [id, doc] of Object.entries(assessmentStore)) {
+            if (doc.studentId === currentStudentId && doc.sportKey === sportKey && doc.source === 'teacher') {
+              teacherAssessment = doc;
+              console.log('[Skill Overview] Found teacher assessment with legacy ID (will consolidate):', { legacyId: id, skillCount: doc.skills ? doc.skills.length : 0 });
+              break;
+            }
           }
         }
-      }
 
-      // Get teacher skill definitions for custom names and descriptions
-      const skillDef = getCurrentSportDefinitions(student, sportKey);
+        // Get teacher skill definitions for custom names and descriptions
+        const skillDef = getCurrentSportDefinitions(student, sportKey);
 
-      if (selfAssessments.length === 0 && !teacherAssessment) {
-        body.innerHTML = `<div class="empty-state">
-          <div class="empty-icon">📊</div>
-          <p>Complete assessment lessons 1, 5, 9, and 10 to see your skills chart.</p>
-        </div>`;
-        console.log('[Skill Overview] Empty state: No self or teacher assessments');
-        return;
-      }
+        if (selfAssessments.length === 0 && !teacherAssessment) {
+          body.innerHTML = `<div class="empty-state">
+            <div class="empty-icon">📊</div>
+            <p>Complete assessment lessons 1, 5, 9, and 10 to see your skills chart.</p>
+          </div>`;
+          console.log('[Skill Overview] Empty state: No self or teacher assessments');
+          return;
+        }
 
       // Build most recent self-assessment values per skill
       const selfSkillMap = {};
@@ -10688,9 +10719,28 @@
             </blockquote>`;
         }
       }
+      } catch (error) {
+        console.error('[Skill Overview] CRITICAL ERROR:', {
+          errorMessage: error.message,
+          errorStack: error.stack,
+          studentId: currentStudentId,
+          sportKey: sportKey
+        });
+        
+        // Show error state to student
+        const body = document.getElementById('lessonContentBody');
+        if (body) {
+          body.innerHTML = `<div class="empty-state" style="color:#ff6b6b;">
+            <div class="empty-icon">⚠️</div>
+            <p>There was an issue loading your skills overview.</p>
+            <p style="font-size:0.85rem;color:var(--text-2);">Error: ${error.message}</p>
+            <button class="btn btn-secondary" onclick="forceRefreshSkillsOverview()" style="margin-top:12px;">Try Again</button>
+          </div>`;
+        }
+        
+        showToast('❌ Could not load Skills Overview. Please try again.');
+      }
     }
-
-    /* ---- renderSportHistory (Step 11) ---- */
     function renderSportHistory(sportKey) {
       const sport = SPORTS_LIST.find(s => s.key === sportKey);
       const student = sdkLoad('students', currentStudentId);
