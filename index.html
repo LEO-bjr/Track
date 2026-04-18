@@ -5778,9 +5778,17 @@
               if (currentSportKey === payload.sportKey && document.getElementById('lessonContentTitle').textContent.includes('Skills Overview')) {
                 // Clear cached data to force fresh read
                 if (window.skillsChartInstance) {
+                  console.log('[Student App] Destroying old chart instance before refresh');
                   window.skillsChartInstance.destroy();
                   window.skillsChartInstance = null;
                 }
+                // Also destroy the legacy chart reference if it exists
+                if (window.skillsChart) {
+                  console.log('[Student App] Destroying legacy skillsChart before refresh');
+                  window.skillsChart.destroy();
+                  window.skillsChart = null;
+                }
+                console.log('[Student App] Canvas cleared, re-rendering Skills Overview with fresh data');
                 renderSkillsOverview(currentSportKey);
                 showToast('📊 Skills data synchronized across tabs!');
               }
@@ -5820,6 +5828,19 @@
         console.log('[Student App] Assessment update event received:', { studentId, sportKey, currentStudentId, currentSportKey, isSkillsView: document.getElementById('lessonContentTitle').textContent.includes('Skills Overview') });
         if (studentId === currentStudentId && sportKey === currentSportKey && document.getElementById('lessonContentTitle').textContent.includes('Skills Overview')) {
           console.log('[Student App] Updating Skill Overview with fresh teacher data');
+          // Clear the chart canvas before redrawing to prevent memory leaks and display issues
+          if (window.skillsChartInstance) {
+            console.log('[Student App] Destroying skillsChartInstance before re-render');
+            window.skillsChartInstance.destroy();
+            window.skillsChartInstance = null;
+          }
+          // Also destroy legacy chart reference if it exists
+          if (window.skillsChart) {
+            console.log('[Student App] Destroying legacy skillsChart before re-render');
+            window.skillsChart.destroy();
+            window.skillsChart = null;
+          }
+          console.log('[Student App] Canvas cleared, rendering fresh Skills Overview graphic');
           renderSkillsOverview(currentSportKey);
           showToast('📊 Teacher assessment received!');
         }
@@ -7628,37 +7649,55 @@
       
       /* Helper to update HP preview with delta calculation */
       function updateHPPreview() {
-        const allStudents = sdkLoadAll('students') || [];
-        const classGrade = `Year ${yearGroup} ${classLetter}`;
-        const classStudents = allStudents.filter(s => s.classGrade === classGrade);
-        
-        let totalDelta = 0;
-        let affectedStudents = 0;
-        const studentDeltas = [];
-        
-        classStudents.forEach(student => {
-          const compositeId = `${student._id}_${sportKey}_teacher`;
-          const assessment = sdkLoad('assessments', compositeId);
-          if (assessment && assessment.skills && assessment.skills.length > 0) {
-            /* Use stored previous total for accurate delta calculation */
-            const previousTotal = assessment._previousAssessmentTotal || 0;
-            const newTotal = assessment.skills.reduce((sum, s) => sum + (s.level || 0), 0);
-            const delta = newTotal - previousTotal;
-            if (newTotal > 0) {
-              totalDelta += delta;
-              affectedStudents++;
-              studentDeltas.push({
-                name: `${student.firstName} ${student.familyName}`,
-                previousTotal,
-                newTotal,
-                delta
-              });
-            }
+        try {
+          /* Extract values from dropdowns to avoid undefined variable errors */
+          const yearGroup = document.getElementById('baFilterYear').value;
+          const classLetter = document.getElementById('baFilterClass').value;
+          const sportKey = document.getElementById('baSportSelect').value;
+          
+          if (!yearGroup || !classLetter || !sportKey) {
+            console.warn('[updateHPPreview] Missing filter values:', { yearGroup, classLetter, sportKey });
+            return;
           }
-        });
-        
-        const sign = totalDelta > 0 ? '+' : '';
-        document.getElementById('hpTotalPreview').textContent = `${sign}${totalDelta} HP to distribute (${affectedStudents} students)`;
+          
+          const allStudents = sdkLoadAll('students') || [];
+          const classGrade = `Year ${yearGroup} ${classLetter}`;
+          const classStudents = allStudents.filter(s => s.classGrade === classGrade);
+          
+          let totalDelta = 0;
+          let affectedStudents = 0;
+          const studentDeltas = [];
+          
+          classStudents.forEach(student => {
+            const compositeId = `${student._id}_${sportKey}_teacher`;
+            const assessment = sdkLoad('assessments', compositeId);
+            if (assessment && assessment.skills && assessment.skills.length > 0) {
+              /* Use stored previous total for accurate delta calculation */
+              const previousTotal = assessment._previousAssessmentTotal || 0;
+              const newTotal = assessment.skills.reduce((sum, s) => sum + (s.level || 0), 0);
+              const delta = newTotal - previousTotal;
+              if (newTotal > 0) {
+                totalDelta += delta;
+                affectedStudents++;
+                studentDeltas.push({
+                  name: `${student.firstName} ${student.familyName}`,
+                  previousTotal,
+                  newTotal,
+                  delta
+                });
+              }
+            }
+          });
+          
+          const sign = totalDelta > 0 ? '+' : '';
+          const hpPreviewEl = document.getElementById('hpTotalPreview');
+          if (hpPreviewEl) {
+            hpPreviewEl.textContent = `${sign}${totalDelta} HP to distribute (${affectedStudents} students)`;
+          }
+        } catch (error) {
+          console.error('[updateHPPreview] Error calculating HP preview:', error);
+          /* Do not break the flow - allow user to continue even if preview fails */
+        }
       }
       
       updateHPPreview();
@@ -7969,8 +8008,16 @@
         showToast(`🎉 Assessment for ${sportName} updated. Existing records have been synchronized.${consolidationMsg}\n${sign}${totalHPDelta} House Points distributed to ${studentsAwarded} ${studentsAwarded === 1 ? 'student' : 'students'}.`);
         
         /* Refresh the matrix and overview */
-        applyBulkAssessmentFilters();
-        renderSkillDistributionOverview(yearGroup, classLetter, sportKey);
+        try {
+          applyBulkAssessmentFilters();
+        } catch (filterError) {
+          console.error('[Bulk Assessment] Error applying filters:', filterError);
+        }
+        try {
+          renderSkillDistributionOverview(yearGroup, classLetter, sportKey);
+        } catch (distError) {
+          console.error('[Bulk Assessment] Error rendering skill distribution:', distError);
+        }
         
       } catch (error) {
         console.error('[Bulk Assessment Submit Error]', error, {
