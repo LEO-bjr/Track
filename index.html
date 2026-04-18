@@ -7246,6 +7246,123 @@
       document.getElementById('baSportSelect').addEventListener('change', () => applyBulkAssessmentFilters());
     }
 
+    function calculateClassCompetencyStats(classGrade, sportKey, skills) {
+      /* Calculate distribution of skill levels across all students in the class */
+      const allStudents = sdkLoadAll('students') || [];
+      const classStudents = allStudents.filter(s => s.classGrade === classGrade);
+      
+      // Initialize stats for each skill
+      const stats = {};
+      skills.forEach(skill => {
+        stats[skill.name] = { 1: 0, 2: 0, 3: 0, 4: 0, total: 0 };
+      });
+      
+      // Count levels for each skill
+      classStudents.forEach(student => {
+        const compositeId = `${student._id}_${sportKey}_teacher`;
+        const assessment = sdkLoad('assessments', compositeId);
+        
+        if (assessment && assessment.skills) {
+          assessment.skills.forEach(skillData => {
+            const skillName = skillData.name;
+            if (stats[skillName]) {
+              const level = skillData.level || 0;
+              if (level >= 1 && level <= 4) {
+                stats[skillName][level]++;
+              }
+              stats[skillName].total++;
+            }
+          });
+        }
+      });
+      
+      return { stats, classStudents };
+    }
+
+    function renderClassCompetencyBreakdown(classGrade, sportKey, skills) {
+      /* Create animated stats cards for class competency */
+      const { stats, classStudents } = calculateClassCompetencyStats(classGrade, sportKey, skills);
+      
+      const colors = ['#ff4444', '#ffb700', '#90ee90', '#228b22']; /* Red, Yellow, Light Green, Deep Green */
+      const levelNames = ['Beginner', 'Explorer', 'Performer', 'Champion'];
+      
+      let html = `<div style="margin-bottom:20px;padding:16px;background:linear-gradient(135deg, var(--surface) 0%, var(--surface-2) 100%);border-radius:12px;border:2px solid var(--border);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+          <h3 style="color:var(--text);margin:0;font-size:1.1rem;">📊 Class Competency Breakdown</h3>
+          <span style="font-size:0.85rem;color:var(--text-2);">Total: <strong style="color:var(--accent);">${classStudents.length}</strong> students</span>
+        </div>
+        
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));gap:12px;">`;
+      
+      skills.forEach(skill => {
+        const skillStats = stats[skill.name];
+        const total = classStudents.length;
+        const hasNoChampions = skillStats[4] === 0;
+        const warningBg = hasNoChampions ? 'rgba(255, 100, 100, 0.15)' : 'transparent';
+        const warningBorder = hasNoChampions ? '2px solid rgba(255, 100, 100, 0.5)' : '1px solid var(--border)';
+        
+        html += `<div style="background:var(--surface-2);padding:14px;border-radius:10px;border:${warningBorder};transition:all 0.3s ease;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <h4 style="color:var(--text);margin:0;font-size:0.95rem;">${skill.name}</h4>
+            ${hasNoChampions ? '<span style="font-size:0.7rem;background:#ff6464;color:#fff;padding:2px 6px;border-radius:3px;font-weight:600;">⚠️ No Level 4</span>' : ''}
+          </div>
+          
+          <div style="display:flex;flex-direction:column;gap:8px;">`;
+        
+        // Build level breakdown bars
+        [1, 2, 3, 4].forEach(level => {
+          const count = skillStats[level];
+          const percentage = total > 0 ? Math.round((count / total) * 100) : 0;
+          const barColor = colors[level - 1];
+          const barWidth = Math.max(percentage, 5); // Min 5% for visibility
+          
+          html += `<div style="font-size:0.8rem;color:var(--text-2);display:flex;align-items:center;gap:8px;">
+            <span style="min-width:50px;font-weight:600;">${levelNames[level - 1]}:</span>
+            <div style="flex:1;height:20px;background:var(--surface);border-radius:4px;overflow:hidden;border:1px solid var(--border);">
+              <div style="height:100%;background:${barColor};width:${barWidth}%;transition:width 0.3s ease;display:flex;align-items:center;justify-content:flex-end;padding-right:4px;">
+                ${percentage > 15 ? `<span style="color:#fff;font-size:0.7rem;font-weight:700;">${percentage}%</span>` : ''}
+              </div>
+            </div>
+            <span style="min-width:40px;text-align:right;font-weight:600;">${count}/${total}</span>
+          </div>`;
+        });
+        
+        html += `</div>
+        </div>`;
+      });
+      
+      html += `</div>
+      </div>`;
+      
+      return html;
+    }
+
+    function updateClassCompetencyStatsDisplay(year, classLetter, sportKey) {
+      /* Refresh the stats display after level changes */
+      const matrixContainer = document.getElementById('baMatrixContainer');
+      const statsContainer = matrixContainer.querySelector('#classCompetencyStatsContainer');
+      
+      if (!statsContainer) return;
+      
+      const classGrade = `Year ${year} ${classLetter}`;
+      const keystage = getKeyStage(year);
+      const defKey = `${keystage}_${sportKey}`;
+      const skillDef = sdkLoad('skillDefinitions', defKey);
+      
+      if (!skillDef) return;
+      
+      const SKILL_SLOTS = ['motor1', 'motor2', 'motor3', 'methodological', 'social'];
+      const skills = SKILL_SLOTS.map(slot => ({
+        _id: slot,
+        name: skillDef[slot]?.name || slot
+      })).filter(s => s.name && s.name.trim() !== '');
+      
+      const newStatsHtml = renderClassCompetencyBreakdown(classGrade, sportKey, skills);
+      statsContainer.innerHTML = newStatsHtml;
+      
+      console.log('[Class Stats] Updated competency breakdown', { classGrade, sportKey });
+    }
+
     function applyBulkAssessmentFilters() {
       const year = document.getElementById('baFilterYear').value;
       const classLetter = document.getElementById('baFilterClass').value;
@@ -7294,7 +7411,22 @@
       const sport = SPORTS_LIST.find(s => s.key === sportKey);
       const colors = ['#ff4444', '#ffb700', '#90ee90', '#228b22']; /* Red, Yellow, Light Green, Deep Green */
       
-      let html = `<div style="overflow-x:auto;">
+      /* Build stats section */
+      const statsHtml = renderClassCompetencyBreakdown(classGrade, sportKey, skills);
+      
+      /* Create accordion for stats with toggle */
+      let html = `
+        <div style="margin-bottom:20px;">
+          <button id="toggleStatsAccordion" style="width:100%;padding:12px;background:linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:600;font-size:0.95rem;transition:all 0.3s ease;display:flex;align-items:center;justify-content:space-between;">
+            <span>📈 Class Analytics Summary</span>
+            <span style="transform:rotate(0deg);transition:transform 0.3s ease;" id="accordionArrow">▼</span>
+          </button>
+          <div id="classCompetencyStatsContainer" style="display:none;margin-top:12px;">
+            ${statsHtml}
+          </div>
+        </div>
+      
+      <div style="overflow-x:auto;">
         <table class="bulk-assessment-table">
           <thead>
             <tr>
@@ -7372,6 +7504,19 @@
       
       matrixContainer.innerHTML = html;
       
+      /* Setup accordion toggle for stats */
+      const toggleBtn = document.getElementById('toggleStatsAccordion');
+      const statsContainer = document.getElementById('classCompetencyStatsContainer');
+      const arrow = document.getElementById('accordionArrow');
+      
+      if (toggleBtn && statsContainer) {
+        toggleBtn.addEventListener('click', function() {
+          const isOpen = statsContainer.style.display !== 'none';
+          statsContainer.style.display = isOpen ? 'none' : 'block';
+          arrow.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(180deg)';
+        });
+      }
+      
       /* Setup level button handlers */
       document.querySelectorAll('.level-btn').forEach(btn => {
         btn.addEventListener('click', function() {
@@ -7399,6 +7544,9 @@
           /* Real-time save */
           saveBulkAssessmentLevel(studentId, sportKey, skillName, level);
           updateHPPreview();
+          
+          /* Real-time update class statistics */
+          updateClassCompetencyStatsDisplay(year, classLetter, sportKey);
         });
       });
       
@@ -7437,6 +7585,10 @@
             });
             
             updateHPPreview();
+            
+            /* Real-time update class statistics */
+            updateClassCompetencyStatsDisplay(year, classLetter, sportKey);
+            
             showToast(`✅ Set all students to Level ${level}`);
           });
         }
